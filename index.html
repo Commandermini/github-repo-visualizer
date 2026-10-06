@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>repo-visualizer — inspect any public GitHub repo</title>
+<meta name="description" content="Paste a public GitHub repo and see its commit history, contributors, language mix, and issue tone rendered like a diff you can read.">
+<meta name="theme-color" content="#0B0E14">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so there's no flash of the wrong theme.
+  (function () {
+    try {
+      var saved = localStorage.getItem('rv_theme');
+      var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    } catch (e) { /* ignore */ }
+  })();
+</script>
+</head>
+<body>
+
+<div id="offline-banner" class="offline-banner hidden" role="status">
+  You're offline — showing cached data where available.
+</div>
+
+<div class="gutter" aria-hidden="true">
+  <div class="gutter-line"></div>
+  <div class="gutter-dot" data-target="hero"></div>
+  <div class="gutter-dot" data-target="health"></div>
+  <div class="gutter-dot" data-target="commits"></div>
+  <div class="gutter-dot" data-target="contributors"></div>
+  <div class="gutter-dot" data-target="languages"></div>
+  <div class="gutter-dot" data-target="issues"></div>
+  <div class="gutter-dot" data-target="ai-summary"></div>
+</div>
+
+<header class="topbar">
+  <span class="prompt">repo-visualizer</span>
+  <span class="topbar-sub">$ git log --stat --remote</span>
+  <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle light and dark theme">
+    <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+    <span id="theme-toggle-label">dark</span>
+  </button>
+</header>
+
+<main>
+
+  <section id="hero" class="section hero">
+    <p class="commit-hash">a3f9c1d</p>
+    <h1>See a repo's history<br>before you clone it.</h1>
+    <p class="lede">Paste any public GitHub repo. Get its commit rhythm, its people, its languages, and the tone of its issues — rendered like a diff, not a dashboard.</p>
+
+    <form id="repo-form" class="terminal" autocomplete="off">
+      <div class="terminal-bar">
+        <span class="dot red"></span><span class="dot amber"></span><span class="dot green"></span>
+        <span class="terminal-title">visualizer — bash</span>
+      </div>
+      <div class="terminal-body">
+        <span class="terminal-prompt">$ visualize</span>
+        <input id="repo-input" type="text" placeholder="facebook/react" spellcheck="false" aria-label="GitHub repository, e.g. owner/repo">
+        <button type="submit" id="run-btn">run</button>
+      </div>
+    </form>
+    <p class="hint" id="hint">try <button type="button" class="chip" data-repo="vercel/next.js">vercel/next.js</button> <button type="button" class="chip" data-repo="torvalds/linux">torvalds/linux</button> <button type="button" class="chip" data-repo="denoland/deno">denoland/deno</button></p>
+    <p class="hint hidden" id="recent-hint"></p>
+    <p class="rate-note">Unauthenticated GitHub API — capped at 60 requests/hour per IP. One repo lookup uses about 5.</p>
+
+    <div class="token-row">
+      <button type="button" id="token-toggle" class="token-toggle">+ add a GitHub token (raises the limit to 5,000/hr)</button>
+      <div id="token-panel" class="token-panel hidden">
+        <div class="token-panel-row">
+          <input type="password" id="token-input" placeholder="ghp_..." autocomplete="off" spellcheck="false">
+          <button type="button" id="token-save-btn">save</button>
+          <button type="button" id="token-clear-btn" class="token-clear hidden">clear</button>
+        </div>
+        <p class="token-note">Kept in memory for this tab only — never saved to disk, never sent anywhere but api.github.com. <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">Create a token</a> with no scopes (public read access is enough).</p>
+      </div>
+      <p class="rate-status" id="rate-status"></p>
+    </div>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section id="repo-meta" class="repo-meta hidden"></section>
+
+  <section id="health" class="section hidden">
+    <h2><span class="section-hash">##</span> health.score</h2>
+    <p class="section-note">One number built from the signals below — commit recency, contributor concentration, issue resolution, and documentation. A heuristic, not a certification.</p>
+    <div class="panel health-panel" id="health-panel">
+      <div class="health-headline">
+        <span id="health-score-value" class="health-score-value">—</span>
+        <span class="health-score-max">/100</span>
+        <span id="health-grade" class="health-grade"></span>
+      </div>
+      <div id="health-breakdown" class="health-breakdown"></div>
+    </div>
+
+    <div class="health-actions-row">
+      <button type="button" id="health-share-btn" class="share-image-btn">download as image</button>
+    </div>
+
+    <div class="compare-toggle-row">
+      <button type="button" id="compare-toggle" class="compare-toggle hidden">+ compare with another repo</button>
+    </div>
+    <div id="compare-collapse" class="compare-collapse">
+      <div id="compare-panel" class="compare-panel">
+        <div class="compare-panel-row">
+          <input type="text" id="compare-input" placeholder="owner/repo, e.g. remix-run/remix" autocomplete="off" spellcheck="false">
+          <button type="button" id="compare-run-btn">compare</button>
+        </div>
+        <p class="compare-status" id="compare-status"></p>
+      </div>
+      <div id="compare-results" class="compare-results hidden"></div>
+    </div>
+  </section>
+
+  <section id="commits" class="section hidden">
+    <h2><span class="section-hash">##</span> commits.log</h2>
+    <p class="section-note">Weekly commit volume from the most recent history on the default branch.</p>
+    <div class="panel">
+      <canvas id="commits-chart" height="220"></canvas>
+      <p class="heatmap-label">daily commit calendar (most recent activity captured)</p>
+      <div id="commit-heatmap" class="commit-heatmap"></div>
+    </div>
+  </section>
+
+  <section id="contributors" class="section hidden">
+    <h2><span class="section-hash">##</span> contributors.json</h2>
+    <p class="section-note">Top contributors by commit count, most active first.</p>
+    <div class="panel">
+      <div id="contributors-list" class="contributors-list"></div>
+    </div>
+  </section>
+
+  <section id="languages" class="section hidden">
+    <h2><span class="section-hash">##</span> languages.stats</h2>
+    <p class="section-note">Share of the codebase by byte count, as reported by GitHub's linguist.</p>
+    <div class="panel panel-split">
+      <canvas id="languages-chart" height="220"></canvas>
+      <ul id="languages-list" class="languages-list"></ul>
+    </div>
+  </section>
+
+  <section id="issues" class="section hidden">
+    <h2><span class="section-hash">##</span> issues.diff</h2>
+    <p class="section-note">Open vs. closed counts, plus a keyword-based read of issue titles — not real sentiment analysis, a quick lexicon scan.</p>
+    <div class="panel">
+      <div class="diff-counts" id="diff-counts"></div>
+      <canvas id="sentiment-chart" height="180"></canvas>
+    </div>
+  </section>
+
+  <section id="ai-summary" class="section hidden">
+    <h2><span class="section-hash">##</span> repo.summary <span class="ai-badge">AI · runs in your browser</span></h2>
+    <p class="section-note">A small instruction-following model downloads once and runs entirely on your device in a background thread — no server, no API key and no cost. It's briefed on the repo's languages, activity, structure, and README, then writes its own summary.</p>
+
+    <div class="panel ai-panel">
+      <div class="ai-action-row">
+        <button type="button" id="ai-generate-btn">generate summary</button>
+        <span class="ai-model-note">~150MB model, downloads once, cached after</span>
+      </div>
+      <div id="ai-output" class="ai-output"></div>
+    </div>
+  </section>
+
+  <div id="error-panel" class="error-panel hidden"></div>
+
+</main>
+
+<footer class="site-footer">
+  <p>Built with the public GitHub REST API. No auth, no server, no data stored anywhere. <span class="commit-hash">HEAD</span></p>
+</footer>
+
+<!-- Off-screen template, populated + captured by exportElementAsImage. Never shown on screen. -->
+<div id="share-card" class="share-card" aria-hidden="true">
+  <div class="share-card-titlebar">
+    <span class="share-card-dot red"></span><span class="share-card-dot amber"></span><span class="share-card-dot green"></span>
+    <span class="share-card-titlebar-label">repo-visualizer</span>
+  </div>
+  <div class="share-card-body">
+    <div class="share-card-header">
+      <img id="share-card-avatar" class="share-card-avatar" alt="">
+      <div class="share-card-title">
+        <div id="share-card-name" class="share-card-name"></div>
+        <div id="share-card-meta" class="share-card-meta"></div>
+      </div>
+      <div class="share-card-score-badge">
+        <span id="share-card-score" class="share-card-score-value"></span>
+        <span class="share-card-score-max">/100</span>
+        <span id="share-card-grade" class="share-card-grade"></span>
+      </div>
+    </div>
+    <p id="share-card-desc" class="share-card-desc"></p>
+    <div id="share-card-stats" class="share-card-stats"></div>
+    <div id="share-card-langs" class="share-card-langs"></div>
+  </div>
+  <div class="share-card-footer">
+    <span class="share-card-brand">## generated by repo-visualizer</span>
+    <span id="share-card-url" class="share-card-url"></span>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
